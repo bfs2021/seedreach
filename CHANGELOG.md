@@ -24,6 +24,9 @@ All notable changes to seedreach are listed here. Versions follow [semantic vers
 ### Fixed
 - A Gemini timeout or dropped connection stopped the whole run with a traceback. It is now retried like
   a busy server (3 times), and if it lasts, that company is reported as an error and the run moves on.
+- A company whose own site was briefly down is no longer skipped for good (#80). HTTP 429, a 5xx, a
+  timeout or a dropped connection is reported as an error and the next run tries the site again; a 404
+  or a non-HTML page is still recorded as skipped, as before.
 
 ## [0.6.0] - 2026-11-14
 

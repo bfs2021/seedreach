@@ -44,7 +44,16 @@ _FILE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js
 
 
 class ScrapeError(Exception):
-    """The page could not be fetched or contained no usable HTML."""
+    """The page could not be fetched or contained no usable HTML.
+
+    `transient` marks a failure that says nothing about the company: a rate limit, a 5xx, a timeout or
+    a dropped connection. The caller reports those as errors instead of recording a skip, so the next
+    run tries the site again.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass
@@ -147,12 +156,13 @@ class Scraper:
                     raise ScrapeError(f"{url} is not an HTML page")
                 return resp.text, str(resp.url)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code < 500:  # 4xx will not improve on retry
-                    raise ScrapeError(f"HTTP {exc.response.status_code} for {url}") from exc
-                last = exc
+                status = exc.response.status_code
+                if status != 429 and status < 500:  # a plain 4xx will not improve on retry
+                    raise ScrapeError(f"HTTP {status} for {url}") from exc
+                last = exc  # rate limited or the server is unwell: retry now, and again on the next run
             except httpx.HTTPError as exc:
                 last = exc
-        raise ScrapeError(f"Could not fetch {url}: {last}")
+        raise ScrapeError(f"Could not fetch {url}: {last}", transient=True) from last
 
     def fetch(self, url: str) -> ScrapedPage:
         url = normalize_url(url)

@@ -247,7 +247,8 @@ Then open Gmail > Drafts, review each draft, and send the ones you like yourself
     for the sender keeps them where you can see them.
 - **Dedupe**: one row per registrable domain, plus a unique index on drafted emails. Drafted and skipped
   companies are never processed again (use `target <url> --force` to retry a skipped one). LLM or Gmail
-  outages are not recorded as skips, so those companies are retried next time.
+  outages are not recorded as skips, so those companies are retried next time — likewise a site that was
+  briefly down when it was read (HTTP 429, a 5xx, a timeout or a dropped connection).
 
 ## How well it works
 

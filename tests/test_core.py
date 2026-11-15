@@ -216,6 +216,32 @@ def test_scraper_excerpt_keeps_the_founder_section_of_a_long_page():
     assert "Co-founder" in _excerpt(text, 3000) and len(_excerpt(text, 3000)) <= 3000
     assert _excerpt("Founder Ada. " + "x" * 5000, 3000).startswith("Founder Ada")
 
+
+def test_scraper_tells_a_temporary_failure_from_a_permanent_one():
+    import httpx
+    from src.intelligence.scraper import ScrapeError, Scraper
+
+    def scraper_for(status=200, content_type="text/html", error=None):
+        def handler(request):
+            if error is not None:
+                raise error
+            return httpx.Response(status, headers={"content-type": content_type},
+                                  text="<html><body>Shiplog builds changelogs.</body></html>")
+        return Scraper(Settings(), client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    def failure(scraper):
+        with pytest.raises(ScrapeError) as caught:
+            scraper.fetch("https://useshiplog.com")
+        return caught.value
+
+    for status in (429, 503, 500):  # the site may recover: not the company's fault
+        assert failure(scraper_for(status=status)).transient, status
+    assert failure(scraper_for(error=httpx.ConnectTimeout("timed out"))).transient
+    assert failure(scraper_for(error=httpx.ConnectError("connection refused"))).transient
+    assert not failure(scraper_for(status=404)).transient
+    assert not failure(scraper_for(status=403)).transient
+    assert not failure(scraper_for(content_type="application/pdf")).transient  # never an HTML page
+
 def test_hn_comment_parsing():
     good = ('Acme | Backend Python Intern | REMOTE | https://acme.dev<p>We build agents. '
             '<a href="https://acme.dev/jobs">jobs</a> <a href="https://jobs.lever.co/acme">lever</a>')
@@ -901,6 +927,28 @@ def test_pipeline_records_a_trace_per_company(tmp_path: Path):
 
     (run,) = pipe.db.recent_runs()
     assert (run["companies"], run["drafted"], run["input_tokens"], run["truncated"]) == (1, 1, 900, 1)
+
+
+def test_pipeline_retries_a_site_that_was_down_but_skips_a_404(tmp_path: Path):
+    from types import SimpleNamespace as NS
+    from src.intelligence.scraper import ScrapeError
+
+    def scraper_raising(error):
+        def fetch(url):
+            raise error
+        return NS(fetch=fetch)
+
+    pipe = _traced_pipeline(tmp_path, "Shiplog builds changelogs.")
+    pipe.scraper = scraper_raising(ScrapeError("Could not fetch https://useshiplog.com: timed out",
+                                               transient=True))
+    down = pipe.process("https://useshiplog.com", "hn")
+    assert down.outcome == "error" and down.detail.startswith("scrape failed: Could not fetch")
+    assert pipe.db.status_of("useshiplog.com") is None  # not recorded: the next run tries it again
+
+    pipe.scraper = scraper_raising(ScrapeError("HTTP 404 for https://useshiplog.com"))
+    gone = pipe.process("https://useshiplog.com", "hn")
+    assert gone.outcome == "skipped" and gone.detail == "scrape failed: HTTP 404 for https://useshiplog.com"
+    assert pipe.db.status_of("useshiplog.com") == "skipped"
 
 
 def test_trace_flags_a_founder_the_page_never_names(tmp_path: Path):

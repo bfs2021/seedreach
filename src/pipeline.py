@@ -190,6 +190,9 @@ class Pipeline:
             with trace.timed("scrape"):
                 page = self.scraper.fetch(url)
         except ScrapeError as exc:
+            if exc.transient:  # the site may be back next time: not recorded, so the company is retried
+                self._record("ERROR", domain, f"scrape failed: {exc}")
+                return Result(domain, "error", f"scrape failed: {exc}")
             return self._skip(domain, url, source, f"scrape failed: {exc}")
         if kind := non_company_kind(urlparse(page.url).hostname or ""):  # redirected to a job board
             return self._skip(domain, url, source, _not_company_site(kind))
